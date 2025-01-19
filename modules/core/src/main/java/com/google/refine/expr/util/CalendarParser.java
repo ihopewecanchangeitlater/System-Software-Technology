@@ -1638,121 +1638,101 @@ public class CalendarParser {
      * @throws CalendarParserException
      *             if there is a problem with the time
      */
-    private static final void parseTime(String dateStr, ParserState state,
-            String timeStr) throws CalendarParserException {
-        int place = PLACE_HOUR;
+    private static final void parseTime(String dateStr, ParserState state, String timeStr) throws CalendarParserException {
+        String tmpTime = extractTimeAndSetMeridian(dateStr, state, timeStr);
+        parseTimeComponents(dateStr, state, tmpTime);
+    }
 
-        String tmpTime;
-
+    private static String extractTimeAndSetMeridian(String dateStr, ParserState state, String timeStr) throws CalendarParserException {
         final char lastChar = timeStr.charAt(timeStr.length() - 1);
         if (lastChar != 'm' && lastChar != 'M') {
             if (DEBUG) {
                 System.err.println("No AM/PM in \"" + timeStr + "\" (time)");
             }
-            tmpTime = timeStr;
-        } else {
-            final char preLast = timeStr.charAt(timeStr.length() - 2);
-            if (preLast == 'a' || preLast == 'A') {
-                state.setTimePostMeridian(false);
-            } else if (preLast == 'p' || preLast == 'P') {
-                state.setTimePostMeridian(true);
-            } else {
-                throw new CalendarParserException("Bad time \"" + timeStr
-                        + "\" in date \"" + dateStr + "\"");
-            }
-
-            tmpTime = timeStr.substring(0, timeStr.length() - 2);
-            if (DEBUG) {
-                System.err.println("Found "
-                        + (state.isTimePostMeridian() ? "PM" : "AM")
-                        + ". now \"" + tmpTime + "\" (time)");
-            }
+            return timeStr;
         }
 
-        String[] tList = tmpTime.split("[:\\.]");
+        final char preLast = timeStr.charAt(timeStr.length() - 2);
+        if (preLast == 'a' || preLast == 'A') {
+            state.setTimePostMeridian(false);
+        } else if (preLast == 'p' || preLast == 'P') {
+            state.setTimePostMeridian(true);
+        } else {
+            throw new CalendarParserException("Bad time \"" + timeStr + "\" in date \"" + dateStr + "\"");
+        }
+
+        if (DEBUG) {
+            System.err.println("Found " + (state.isTimePostMeridian() ? "PM" : "AM") + ". now \"" + timeStr.substring(0, timeStr.length() - 2) + "\" (time)");
+        }
+
+        return timeStr.substring(0, timeStr.length() - 2);
+    }
+
+    private static void parseTimeComponents(String dateStr, ParserState state, String timeStr) throws CalendarParserException {
+        String[] tList = timeStr.split("[:\\.]");
+        int place = PLACE_HOUR;
+
         for (String token : tList) {
             if (DEBUG) {
-                System.err.println("HOUR "
-                        + (state.isHourSet() ? Integer
-                                .toString(state.getHour()) : "UNSET")
-                        + ", MINUTE "
-                        + (state.isMinuteSet() ? Integer.toString(state
-                                .getMinute()) : "UNSET")
-                        + ", SECOND "
-                        + (state.isSecondSet() ? Integer.toString(state
-                                .getSecond()) : "UNSET")
-                        + ", MILLISECOND "
-                        + (state.isMillisecondSet() ? Integer.toString(state
-                                .getMillisecond()) : "UNSET")
-                        + ", TOKEN=\""
-                        + token + "\"");
+                System.err.println("HOUR " + (state.isHourSet() ? state.getHour() : "UNSET") + 
+                                   ", MINUTE " + (state.isMinuteSet() ? state.getMinute() : "UNSET") + 
+                                   ", SECOND " + (state.isSecondSet() ? state.getSecond() : "UNSET") + 
+                                   ", MILLISECOND " + (state.isMillisecondSet() ? state.getMillisecond() : "UNSET") + 
+                                   ", TOKEN=\"" + token + "\"");
             }
 
-            final int val;
-            try {
-                val = Integer.parseInt(token);
-            } catch (NumberFormatException nfe) {
-                throw new CalendarParserException("Bad "
-                        + getTimePlaceString(place) + " string \"" + token
-                        + "\" in \"" + dateStr + "\"");
-            }
-
-            switch (place) {
-                case PLACE_HOUR:
-                    try {
-                        state.setHour(val);
-                    } catch (CalendarParserException dfe) {
-                        throw new CalendarParserException(dfe.getMessage()
-                                + " in \"" + dateStr + "\"");
-                    }
-                    if (DEBUG) {
-                        System.err.println("Set hour to " + val);
-                    }
-                    place = PLACE_MINUTE;
-                    break;
-                case PLACE_MINUTE:
-                    try {
-                        state.setMinute(val);
-                    } catch (CalendarParserException dfe) {
-                        throw new CalendarParserException(dfe.getMessage()
-                                + " in \"" + dateStr + "\"");
-                    }
-                    if (DEBUG) {
-                        System.err.println("Set minute to " + val);
-                    }
-                    place = PLACE_SECOND;
-                    break;
-                case PLACE_SECOND:
-                    try {
-                        state.setSecond(val);
-                    } catch (CalendarParserException dfe) {
-                        throw new CalendarParserException(dfe.getMessage()
-                                + " in \"" + dateStr + "\"");
-                    }
-                    if (DEBUG) {
-                        System.err.println("Set second to " + val);
-                    }
-                    place = PLACE_MILLI;
-                    break;
-                case PLACE_MILLI:
-                    try {
-                        state.setMillisecond(val);
-                    } catch (CalendarParserException dfe) {
-                        throw new CalendarParserException(dfe.getMessage()
-                                + " in \"" + dateStr + "\"");
-                    }
-                    if (DEBUG) {
-                        System.err.println("Set millisecond to " + val);
-                    }
-                    place = PLACE_UNKNOWN;
-                    break;
-                default:
-                    throw new CalendarParserException("Unexpected place value "
-                            + place);
-            }
+            int val = parseTokenAsInteger(dateStr, token, place);
+            updateStateWithParsedValue(dateStr, state, val, place);
+            place = getNextPlace(place);
         }
     }
 
+    private static int parseTokenAsInteger(String dateStr, String token, int place) throws CalendarParserException {
+        try {
+            return Integer.parseInt(token);
+        } catch (NumberFormatException nfe) {
+            throw new CalendarParserException("Bad " + getTimePlaceString(place) + " string \"" + token + "\" in \"" + dateStr + "\"");
+        }
+    }
+
+    private static void updateStateWithParsedValue(String dateStr, ParserState state, int val, int place) throws CalendarParserException {
+        try {
+            switch (place) {
+                case PLACE_HOUR:
+                    state.setHour(val);
+                    if (DEBUG) System.err.println("Set hour to " + val);
+                    break;
+                case PLACE_MINUTE:
+                    state.setMinute(val);
+                    if (DEBUG) System.err.println("Set minute to " + val);
+                    break;
+                case PLACE_SECOND:
+                    state.setSecond(val);
+                    if (DEBUG) System.err.println("Set second to " + val);
+                    break;
+                case PLACE_MILLI:
+                    state.setMillisecond(val);
+                    if (DEBUG) System.err.println("Set millisecond to " + val);
+                    break;
+                default:
+                    throw new CalendarParserException("Unexpected place value " + place);
+            }
+        } catch (CalendarParserException dfe) {
+            throw new CalendarParserException(dfe.getMessage() + " in \"" + dateStr + "\"");
+        }
+    }
+
+    private static int getNextPlace(int currentPlace) {
+        switch (currentPlace) {
+            case PLACE_HOUR: return PLACE_MINUTE;
+            case PLACE_MINUTE: return PLACE_SECOND;
+            case PLACE_SECOND: return PLACE_MILLI;
+            default: return PLACE_UNKNOWN;
+        }
+    }
+
+    
+    
     /**
      * Parse a time zone offset string.
      * 
