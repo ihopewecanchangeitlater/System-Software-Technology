@@ -33,10 +33,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 package com.google.refine.browsing.facets;
 
-import java.util.Collections;
-import java.util.Optional;
-import java.util.Set;
-
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -136,16 +132,6 @@ public class RangeFacet implements Facet {
                 MetaParser.parse(_expression);
             } catch (ParsingException e) {
                 throw new IllegalArgumentException(e);
-            }
-        }
-
-        @Override
-        public Optional<Set<String>> getColumnDependencies() {
-            try {
-                return MetaParser.parse(_expression)
-                        .getColumnDependencies(Optional.of(_columnName));
-            } catch (ParsingException e) {
-                return Optional.of(Collections.emptySet());
             }
         }
     }
@@ -334,49 +320,38 @@ public class RangeFacet implements Facet {
 
     @Override
     public void computeChoices(Project project, FilteredRows filteredRows) {
+        computeChoicesCommon(project, filteredRows, true);
+    }
+    @Override
+    public void computeChoices(Project project, FilteredRecords filteredRecords) {
+        computeChoicesCommon(project, filteredRecords, false);
+    }
+    private void computeChoicesCommon(Project project, Object filter, boolean isRowBased) {
         if (_eval != null && _errorMessage == null) {
             RowEvaluable rowEvaluable = getRowEvaluable(project);
-
             Column column = project.columnModel.getColumnByCellIndex(_cellIndex);
             String key = "numeric-bin:row-based:" + _config._expression;
             NumericBinIndex index = (NumericBinIndex) column.getPrecompute(key);
             if (index == null) {
-                index = new NumericBinRowIndex(project, rowEvaluable);
+                if (isRowBased) {
+                    index = new NumericBinRowIndex(project, rowEvaluable);
+                } else {
+                    index = new NumericBinRecordIndex(project, rowEvaluable);
+                }
                 column.setPrecompute(key, index);
             }
-
             retrieveDataFromBaseBinIndex(index);
-
             ExpressionNumericValueBinner binner = new ExpressionNumericValueBinner(rowEvaluable, index);
-
-            filteredRows.accept(project, binner);
-            retrieveDataFromBinner(binner);
-        }
-    }
-
-    @Override
-    public void computeChoices(Project project, FilteredRecords filteredRecords) {
-        if (_eval != null && _errorMessage == null) {
-            RowEvaluable rowEvaluable = getRowEvaluable(project);
-
-            Column column = project.columnModel.getColumnByCellIndex(_cellIndex);
-            String key = "numeric-bin:record-based:" + _config._expression;
-            NumericBinIndex index = (NumericBinIndex) column.getPrecompute(key);
-            if (index == null) {
-                index = new NumericBinRecordIndex(project, rowEvaluable);
-                column.setPrecompute(key, index);
+            if (isRowBased) {
+                ((FilteredRows) filter).accept(project, binner);
+            } else {
+                ((FilteredRecords) filter).accept(project, binner);
             }
-
-            retrieveDataFromBaseBinIndex(index);
-
-            ExpressionNumericValueBinner binner = new ExpressionNumericValueBinner(rowEvaluable, index);
-
-            filteredRecords.accept(project, binner);
-
             retrieveDataFromBinner(binner);
         }
-    }
+    } 
 
+    
     protected RowEvaluable getRowEvaluable(Project project) {
         return new ExpressionBasedRowEvaluable(_config._columnName, _cellIndex, _eval);
     }
