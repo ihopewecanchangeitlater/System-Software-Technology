@@ -31,6 +31,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
  */
 
+
 package com.google.refine.browsing;
 
 import java.util.Collections;
@@ -56,9 +57,9 @@ public class Engine {
 
     static public enum Mode {
         @JsonProperty("row-based")
-        RowBased, @JsonProperty("record-based")
+        RowBased, 
+        @JsonProperty("record-based")
         RecordBased
-
     }
 
     public final static String INCLUDE_DEPENDENT = "includeDependent";
@@ -69,17 +70,9 @@ public class Engine {
     @JsonIgnore
     protected Project _project;
     @JsonProperty("facets")
-    protected List<Facet> _facets = new LinkedList<Facet>();
+    protected List<Facet> _facets = new LinkedList<>();
     @JsonIgnore
     protected EngineConfig _config = new EngineConfig(Collections.emptyList(), Mode.RowBased);
-
-    static public String modeToString(Mode mode) {
-        return mode == Mode.RowBased ? MODE_ROW_BASED : MODE_RECORD_BASED;
-    }
-
-    static public Mode stringToMode(String s) {
-        return MODE_ROW_BASED.equals(s) ? Mode.RowBased : Mode.RecordBased;
-    }
 
     public Engine(Project project) {
         _project = project;
@@ -94,17 +87,45 @@ public class Engine {
         _config = new EngineConfig(_config.getFacetConfigs(), mode);
     }
 
+    public void initializeFromConfig(EngineConfig config) {
+        _config = config;
+        _facets = config.getFacetConfigs().stream()
+                .map(c -> c.apply(_project))
+                .collect(Collectors.toList());
+    }
+
+    public void computeFacets() {
+        if (_config.getMode().equals(Mode.RowBased)) {
+            computeRowBasedFacets();
+        } else if (_config.getMode().equals(Mode.RecordBased)) {
+            computeRecordBasedFacets();
+        } else {
+            throw new InternalError("Unknown mode.");
+        }
+    }
+
+    private void computeRowBasedFacets() {
+        for (Facet facet : _facets) {
+            FilteredRows filteredRows = getFilteredRows(facet);
+            facet.computeChoices(_project, filteredRows);
+        }
+    }
+
+    private void computeRecordBasedFacets() {
+        for (Facet facet : _facets) {
+            FilteredRecords filteredRecords = getFilteredRecords(facet);
+            facet.computeChoices(_project, filteredRecords);
+        }
+    }
+
     @JsonIgnore
     public FilteredRows getAllRows() {
         return new FilteredRows() {
-
             @Override
             public void accept(Project project, RowVisitor visitor) {
                 try {
                     visitor.start(project);
-
-                    int c = project.rows.size();
-                    for (int rowIndex = 0; rowIndex < c; rowIndex++) {
+                    for (int rowIndex = 0, c = project.rows.size(); rowIndex < c; rowIndex++) {
                         Row row = project.rows.get(rowIndex);
                         if (visitor.visit(project, rowIndex, rowIndex, row)) {
                             break;
@@ -126,31 +147,32 @@ public class Engine {
         if (_config.getMode().equals(Mode.RecordBased)) {
             return new FilteredRecordsAsFilteredRows(getFilteredRecords(except));
         } else if (_config.getMode().equals(Mode.RowBased)) {
-            ConjunctiveFilteredRows cfr = new ConjunctiveFilteredRows();
-            for (Facet facet : _facets) {
-                if (facet != except) {
-                    RowFilter rowFilter = facet.getRowFilter(_project);
-                    if (rowFilter != null) {
-                        cfr.add(rowFilter);
-                    }
-                }
-            }
-            return cfr;
+            return createRowFilters(except);
         }
         throw new InternalError("Unknown mode.");
+    }
+
+    private FilteredRows createRowFilters(Facet except) {
+        ConjunctiveFilteredRows cfr = new ConjunctiveFilteredRows();
+        for (Facet facet : _facets) {
+            if (facet != except) {
+                RowFilter rowFilter = facet.getRowFilter(_project);
+                if (rowFilter != null) {
+                    cfr.add(rowFilter);
+                }
+            }
+        }
+        return cfr;
     }
 
     @JsonIgnore
     public FilteredRecords getAllRecords() {
         return new FilteredRecords() {
-
             @Override
             public void accept(Project project, RecordVisitor visitor) {
                 try {
                     visitor.start(project);
-
-                    int c = project.recordModel.getRecordCount();
-                    for (int r = 0; r < c; r++) {
+                    for (int r = 0, c = project.recordModel.getRecordCount(); r < c; r++) {
                         Record record = project.recordModel.getRecord(r);
                         visitor.visit(project, record.fromRowIndex, record);
                     }
@@ -168,42 +190,21 @@ public class Engine {
 
     public FilteredRecords getFilteredRecords(Facet except) {
         if (_config.getMode().equals(Mode.RecordBased)) {
-            ConjunctiveFilteredRecords cfr = new ConjunctiveFilteredRecords();
-            for (Facet facet : _facets) {
-                if (facet != except) {
-                    RecordFilter recordFilter = facet.getRecordFilter(_project);
-                    if (recordFilter != null) {
-                        cfr.add(recordFilter);
-                    }
-                }
-            }
-            return cfr;
+            return createRecordFilters(except);
         }
         throw new InternalError("This method should not be called when the engine is not in record mode.");
     }
 
-    public void initializeFromConfig(EngineConfig config) {
-        _config = config;
-        _facets = config.getFacetConfigs().stream()
-                .map(c -> c.apply(_project))
-                .collect(Collectors.toList());
-    }
-
-    public void computeFacets() {
-        if (_config.getMode().equals(Mode.RowBased)) {
-            for (Facet facet : _facets) {
-                FilteredRows filteredRows = getFilteredRows(facet);
-
-                facet.computeChoices(_project, filteredRows);
+    private FilteredRecords createRecordFilters(Facet except) {
+        ConjunctiveFilteredRecords cfr = new ConjunctiveFilteredRecords();
+        for (Facet facet : _facets) {
+            if (facet != except) {
+                RecordFilter recordFilter = facet.getRecordFilter(_project);
+                if (recordFilter != null) {
+                    cfr.add(recordFilter);
+                }
             }
-        } else if (_config.getMode().equals(Mode.RecordBased)) {
-            for (Facet facet : _facets) {
-                FilteredRecords filteredRecords = getFilteredRecords(facet);
-
-                facet.computeChoices(_project, filteredRecords);
-            }
-        } else {
-            throw new InternalError("Unknown mode.");
         }
+        return cfr;
     }
 }
