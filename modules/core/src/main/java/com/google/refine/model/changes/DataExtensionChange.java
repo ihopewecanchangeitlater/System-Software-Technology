@@ -137,111 +137,104 @@ public class DataExtensionChange implements Change {
     }
 
     @Override
-    public void apply(Project project) {
-        synchronized (project) {
-            if (_firstNewCellIndex < 0) {
-                _firstNewCellIndex = project.columnModel.allocateNewCellIndex();
-                for (int i = 1; i < _columnNames.size(); i++) {
-                    project.columnModel.allocateNewCellIndex();
-                }
+      public void apply(Project project) {
+          synchronized (project) {
+              if (_firstNewCellIndex < 0) {
+                  allocateNewCellIndices(project);
+                  initializeNewRows(project);
+                  processRows(project);
+                  replaceOldRows(project);
+                  createNewColumns(project);
+              }
+              project.update();
+          }
+      }
+      private void allocateNewCellIndices(Project project) {
+          _firstNewCellIndex = project.columnModel.allocateNewCellIndex();
+          for (int i = 1; i < _columnNames.size(); i++) {
+              project.columnModel.allocateNewCellIndex();
+          }
+      }
+      private void initializeNewRows(Project project) {
+          _oldRows = new ArrayList<>(project.rows);
+          _newRows = new ArrayList<>(_oldRows.size());
+      }
+      private void processRows(Project project) {
+          Map<String, Recon> reconMap = new HashMap<>();
+          int cellIndex = project.columnModel.getColumnByName(_baseColumnName).getCellIndex();
+          int keyCellIndex = project.columnModel.columns.get(project.columnModel.getKeyColumnIndex()).getCellIndex();
+          int index = 0;
+          int rowIndex = index < _rowIndices.size() ? _rowIndices.get(index) : _oldRows.size();
+          DataExtension dataExtension = index < _rowIndices.size() ? _dataExtensions.get(index) : null;
+          index++;
+          for (int r = 0; r < _oldRows.size(); r++) {
+              Row oldRow = _oldRows.get(r);
+              if (r < rowIndex) {
+                  _newRows.add(oldRow.dup());
+              } else {
+                  processRowWithDataExtension(oldRow, dataExtension, reconMap, cellIndex, keyCellIndex);
+                  rowIndex = index < _rowIndices.size() ? _rowIndices.get(index) : _oldRows.size();
+                  dataExtension = index < _rowIndices.size() ? _dataExtensions.get(index) : null;
+                  index++;
+              }
+          }
+      }
+      private void processRowWithDataExtension(Row oldRow, DataExtension dataExtension, Map<String, Recon> reconMap, int cellIndex, int keyCellIndex) {
+          if (dataExtension == null || dataExtension.data.length == 0) {
+              _newRows.add(oldRow);
+          } else {
+              Row firstNewRow = oldRow.dup();
+              extendRow(firstNewRow, dataExtension, 0, reconMap);
+              _newRows.add(firstNewRow);
+              int r2 = _newRows.size();
+              for (int subR = 1; subR < dataExtension.data.length; subR++) {
+                  Row newRow = createOrExtendRow(dataExtension, reconMap, subR, r2, cellIndex, keyCellIndex);
+                  _newRows.add(newRow);
+                  r2++;
+              }
+          }
+      }
+      private Row createOrExtendRow(DataExtension dataExtension, Map<String, Recon> reconMap, int subR, int r2, int cellIndex, int keyCellIndex) {
+          if (r2 < _oldRows.size()) {
+              Row oldRow2 = _oldRows.get(r2);
+              if (oldRow2.isCellBlank(cellIndex) && oldRow2.isCellBlank(keyCellIndex)) {
+                  Row newRow = oldRow2.dup();
+                  extendRow(newRow, dataExtension, subR, reconMap);
+                  return newRow;
+              }
+          }
+          Row newRow = new Row(cellIndex + _columnNames.size());
+          extendRow(newRow, dataExtension, subR, reconMap);
+          return newRow;
+      }
+      private void replaceOldRows(Project project) {
+          project.rows.clear();
+          project.rows.addAll(_newRows);
+      }
+      private void createNewColumns(Project project) {
+          for (int i = 0; i < _columnNames.size(); i++) {
+              String name = _columnNames.get(i);
+              int cellIndex = _firstNewCellIndex + i;
+              Column column = new Column(cellIndex, name);
+              ReconType columnType = _columnTypes.get(i);
+              column.setReconConfig(new DataExtensionReconConfig(_service, _identifierSpace, _schemaSpace, columnType));
+              if (project.columnModel.getColumnByName(_baseColumnName) != null) {
+                  column.setSourceReconConfig(project.columnModel.getColumnByName(_baseColumnName).getReconConfig());
+              }
+              ReconStats reconStats = ReconStats.create(project, cellIndex);
+              if (reconStats.matchedTopics > 0) {
+                  column.setReconStats(reconStats);
+              }
+              try {
+                  project.columnModel.addColumn(_columnInsertIndex + i, column, true);
+                  _columnNames.set(i, column.getName());
+              } catch (ModelException e) {
+                  // won't get here since we set the avoid collision flag
+              }
+          }
+      }
 
-                _oldRows = new ArrayList<Row>(project.rows);
-
-                _newRows = new ArrayList<Row>(project.rows.size());
-
-                int cellIndex = project.columnModel.getColumnByName(_baseColumnName).getCellIndex();
-                int keyCellIndex = project.columnModel.columns.get(project.columnModel.getKeyColumnIndex()).getCellIndex();
-                int index = 0;
-
-                int rowIndex = index < _rowIndices.size() ? _rowIndices.get(index) : _oldRows.size();
-                DataExtension dataExtension = index < _rowIndices.size() ? _dataExtensions.get(index) : null;
-
-                index++;
-
-                Map<String, Recon> reconMap = new HashMap<String, Recon>();
-
-                for (int r = 0; r < _oldRows.size(); r++) {
-                    Row oldRow = _oldRows.get(r);
-                    if (r < rowIndex) {
-                        _newRows.add(oldRow.dup());
-                        continue;
-                    }
-
-                    if (dataExtension == null || dataExtension.data.length == 0) {
-                        _newRows.add(oldRow);
-                    } else {
-                        Row firstNewRow = oldRow.dup();
-                        extendRow(firstNewRow, dataExtension, 0, reconMap);
-                        _newRows.add(firstNewRow);
-
-                        int r2 = r + 1;
-                        for (int subR = 1; subR < dataExtension.data.length; subR++) {
-                            if (r2 < project.rows.size()) {
-                                Row oldRow2 = project.rows.get(r2);
-                                if (oldRow2.isCellBlank(cellIndex) &&
-                                        oldRow2.isCellBlank(keyCellIndex)) {
-
-                                    Row newRow = oldRow2.dup();
-                                    extendRow(newRow, dataExtension, subR, reconMap);
-
-                                    _newRows.add(newRow);
-                                    r2++;
-
-                                    continue;
-                                }
-                            }
-
-                            Row newRow = new Row(cellIndex + _columnNames.size());
-                            extendRow(newRow, dataExtension, subR, reconMap);
-
-                            _newRows.add(newRow);
-                        }
-
-                        r = r2 - 1; // r will be incremented by the for loop anyway
-                    }
-
-                    rowIndex = index < _rowIndices.size() ? _rowIndices.get(index) : _oldRows.size();
-                    dataExtension = index < _rowIndices.size() ? _dataExtensions.get(index) : null;
-                    index++;
-                }
-            }
-
-            project.rows.clear();
-            project.rows.addAll(_newRows);
-
-            for (int i = 0; i < _columnNames.size(); i++) {
-                String name = _columnNames.get(i);
-                int cellIndex = _firstNewCellIndex + i;
-
-                Column column = new Column(cellIndex, name);
-                ReconType columnType = _columnTypes.get(i);
-                column.setReconConfig(new DataExtensionReconConfig(
-                        _service,
-                        _identifierSpace,
-                        _schemaSpace,
-                        columnType));
-                if (project.columnModel.getColumnByName(_baseColumnName) != null) {
-                    column.setSourceReconConfig(project.columnModel.getColumnByName(_baseColumnName).getReconConfig());
-                }
-                ReconStats reconStats = ReconStats.create(project, cellIndex);
-                if (reconStats.matchedTopics > 0) {
-                    column.setReconStats(reconStats);
-                }
-
-                try {
-                    project.columnModel.addColumn(_columnInsertIndex + i, column, true);
-
-                    // the column might have been renamed to avoid collision
-                    _columnNames.set(i, column.getName());
-                } catch (ModelException e) {
-                    // won't get here since we set the avoid collision flag
-                }
-            }
-
-            project.update();
-        }
-    }
-
+    
     protected void extendRow(
             Row row,
             DataExtension dataExtension,
